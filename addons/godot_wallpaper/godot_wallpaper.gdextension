@@ -1,0 +1,11 @@
+[configuration]
+
+entry_symbol = "godot_wallpaper_library_init"
+compatibility_minimum = "4.7"
+reloadable = true
+
+[libraries]
+
+windows.debug.x86_64 = "res://addons/godot_wallpaper/bin/godot_wallpaper.dll"
+windows.release.x86_64 = "res://addons/godot_wallpaper/bin/godot_wallpaper.dll"
+
