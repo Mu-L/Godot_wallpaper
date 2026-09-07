@@ -25,6 +25,7 @@ const INVALID_STATUS_INDICATOR_ID := -1
 # ============================================================================
 @export var auto_enter_desktop := true
 @export_range(0.1, 10.0, 0.1) var enter_delay_seconds := 1.0
+@export_range(0.2, 5.0, 0.1) var layer_watchdog_interval_seconds := 0.5
 
 # 【核心：不要删除】原生桌面层对象，由进入、恢复和退出流程共同使用。
 var desktop_layer
@@ -41,6 +42,8 @@ var status_text := "正在初始化桌面层…"
 var tray_menu := RID()
 var tray_indicator_id := INVALID_STATUS_INDICATOR_ID
 var tray_icon: ImageTexture
+var shutdown_requested := false
+var watchdog_failure_reported := false
 
 
 # 【核心：不要删除】程序启动入口。
@@ -61,6 +64,7 @@ func _ready() -> void:
 		queue_redraw()
 		_finish_autotest(false)
 		return
+	_start_layer_watchdog()
 
 	if auto_enter_desktop:
 		await get_tree().create_timer(enter_delay_seconds).timeout
@@ -127,8 +131,17 @@ func _enter_desktop() -> void:
 			for frame in 10:
 				await get_tree().process_frame
 			var verification: Dictionary = desktop_layer.verify_reparent_mode()
-			_leave_desktop()
-			_finish_autotest(verification.get("correct_layer", false))
+			var refresh_result: Dictionary = desktop_layer.refresh_reparent_mode()
+			var autotest_succeeded: bool = (
+				verification.get("correct_layer", false)
+				and refresh_result.get("success", false)
+			)
+			if autotest_succeeded:
+				# 通过与真实托盘相同的 deferred 退出路径完成验收。
+				_on_tray_exit()
+			else:
+				_leave_desktop()
+				_finish_autotest(false)
 	else:
 		status_text = "桌面层挂载失败：%s" % result.get("reason", "unknown")
 		push_error(status_text)
@@ -153,6 +166,25 @@ func _leave_desktop() -> void:
 	if desktop_layer != null:
 		desktop_layer.leave_reparent_mode()
 		desktop_layer.leave_desktop_mode()
+
+
+# 【桌面层核心：不要删除】托盘菜单可能临时激活宿主窗口并改变 Z-order。
+# 看门狗在菜单关闭、主循环恢复后验证层级，并只在异常时重新压回图标层下方。
+func _start_layer_watchdog() -> void:
+	while is_inside_tree():
+		await get_tree().create_timer(layer_watchdog_interval_seconds).timeout
+		if desktop_layer == null or not desktop_layer.is_reparent_mode_active():
+			continue
+		var verification: Dictionary = desktop_layer.verify_reparent_mode()
+		if verification.get("correct_layer", false):
+			watchdog_failure_reported = false
+			continue
+		var refresh_result: Dictionary = desktop_layer.refresh_reparent_mode()
+		if refresh_result.get("success", false):
+			watchdog_failure_reported = false
+		elif not watchdog_failure_reported:
+			watchdog_failure_reported = true
+			push_warning("桌面层自动纠正失败：%s" % refresh_result.get("reason", "unknown"))
 
 
 # ============================================================================
@@ -206,17 +238,28 @@ func _destroy_tray() -> void:
 
 
 func _on_tray_enter(_tag = null) -> void:
-	_enter_desktop()
+	call_deferred("_enter_desktop")
 
 
 func _on_tray_restore(_tag = null) -> void:
+	call_deferred("_restore_from_tray")
+
+
+func _restore_from_tray() -> void:
 	_leave_desktop()
 	status_text = "已恢复普通窗口 · 可从托盘再次进入"
 	queue_redraw()
 
 
 func _on_tray_exit(_tag = null) -> void:
-	# 【不要改变顺序】必须先恢复 Windows 窗口，再退出程序。
+	if shutdown_requested:
+		return
+	shutdown_requested = true
+	call_deferred("_quit_safely")
+
+
+func _quit_safely() -> void:
+	# 【不要改变顺序】在原生菜单回调返回后，先恢复窗口，再退出和销毁托盘。
 	_leave_desktop()
 	get_tree().quit()
 

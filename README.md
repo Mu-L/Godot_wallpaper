@@ -215,6 +215,7 @@ func _exit_tree() -> void:
 | `prepare_reparent_mode()` | 请求 Explorer 准备可用的 WorkerW 结构 | 特定 Shell 结构下使用 |
 | `enter_reparent_mode()` | 保存原窗口状态并执行桌面层挂载 | 仅在分析安全后调用 |
 | `verify_reparent_mode()` | 验证父窗口、样式、尺寸和 Z-order | 测试或诊断时使用 |
+| `refresh_reparent_mode()` | 使用已保存的桌面宿主重新校正尺寸和 Z-order | 层级被托盘或系统激活改变时使用 |
 | `leave_reparent_mode()` | 恢复父级、样式、位置和尺寸 | 恢复和退出时必须调用 |
 | `is_reparent_mode_active()` | 查询是否处于 reparent 模式 | 状态 UI 可选使用 |
 
@@ -289,7 +290,9 @@ addons/godot_wallpaper/
 - 仅复制插件到新项目不会自动出现托盘。
 - 需要托盘时，可以复用模板的 `_create_tray()`、`_destroy_tray()` 和 `_on_tray_*()`。
 - 不需要托盘时，可以成套删除托盘代码，不影响 DLL 的桌面层功能。
-- 托盘退出回调必须先恢复桌面层，再调用 `get_tree().quit()`。
+- NativeMenu 回调中不要直接恢复、销毁菜单或退出；模板使用 `call_deferred()`，等原生菜单回调返回后再执行操作，避免重入卡死。
+- 托盘可能短暂激活宿主窗口。模板每 0.5 秒验证桌面层，只在 Z-order 或尺寸异常时调用 `refresh_reparent_mode()` 自动纠正。
+- 延迟执行的退出流程必须先恢复桌面层，再调用 `get_tree().quit()`。
 
 ## 9. 游戏交互注意事项
 
